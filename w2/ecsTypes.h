@@ -1,5 +1,7 @@
 #pragma once
 
+#include <flecs.h>
+
 struct Position;
 struct MovePos;
 
@@ -112,3 +114,9 @@ struct Team
 
 struct TextureSource {};
 
+struct WayPoint
+{
+  flecs::entity next;
+};
+
+struct IsPickUpper {};

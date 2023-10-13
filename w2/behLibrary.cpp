@@ -51,6 +51,44 @@ struct Selector : public CompoundNode
   }
 };
 
+struct Not : public BehNode
+{
+  BehNode* node;
+  Not(BehNode* node) : node(node) {}
+
+  BehResult update(flecs::world &ecs, flecs::entity entity, Blackboard &bb) override
+  {
+    BehResult res = node->update(ecs, entity, bb);
+    if (res == BEH_SUCCESS)
+    {
+      res = BEH_FAIL;
+    }
+    else if (res == BEH_FAIL)
+    {
+      res = BEH_SUCCESS;
+    }
+
+    return res;
+  }
+};
+
+struct Parallel : public CompoundNode
+{
+  BehResult update(flecs::world &ecs, flecs::entity entity, Blackboard &bb) override
+  {
+    for (auto node : nodes)
+    {
+      BehResult res = node->update(ecs, entity, bb);
+      if (res != BEH_RUNNING)
+      {
+        return res;
+      }
+    }
+    
+    return BEH_RUNNING;
+  }
+};
+
 struct MoveToEntity : public BehNode
 {
   size_t entityBb = size_t(-1); // wraps to 0xff...
@@ -197,6 +235,79 @@ struct Patrol : public BehNode
   }
 };
 
+struct FindPickUp : public BehNode
+{
+  size_t entityBb = size_t(-1);
+
+  FindPickUp(flecs::entity entity, const char *bb_name)
+  {
+    entityBb = reg_entity_blackboard_var<flecs::entity>(entity, bb_name);
+  }
+
+  BehResult update(flecs::world &ecs, flecs::entity entity, Blackboard &bb) override
+  {
+    flecs::entity closest_pick_up;
+    float min_dist = FLT_MAX;
+
+    static auto heals = ecs.query<const Position, const HealAmount>();
+    entity.set([&](const Position &pos)
+    {
+      heals.each([&](flecs::entity ent, const Position &epos, const HealAmount&)
+      {
+        float cur_dist = dist(epos, pos);
+        if (cur_dist < min_dist)
+        {
+          min_dist = cur_dist;
+          closest_pick_up = ent;
+        }
+      });
+    });
+    
+    static auto power_ups = ecs.query<const Position, const PowerupAmount>();
+    entity.set([&](const Position &pos)
+    {
+      power_ups.each([&](flecs::entity ent, const Position &epos, const PowerupAmount&)
+      {
+        float cur_dist = dist(epos, pos);
+        if (cur_dist < min_dist)
+        {
+          min_dist = cur_dist;
+          closest_pick_up = ent;
+        }
+      });
+    });
+    
+    if (ecs.is_valid(closest_pick_up))
+    {
+      bb.set(entityBb, closest_pick_up);
+      return BEH_SUCCESS;
+    }
+
+    return BEH_FAIL;
+  }
+};
+
+struct NextWayPoint : public BehNode
+{
+  size_t entityBb = size_t(-1);
+  NextWayPoint(flecs::entity entity, const char *bb_name)
+  {
+    entityBb = reg_entity_blackboard_var<flecs::entity>(entity, bb_name);
+  }
+
+  BehResult update(flecs::world &ecs, flecs::entity, Blackboard &bb) override
+  {
+    auto prev = bb.get<flecs::entity>(entityBb);
+    auto next = prev.get<WayPoint>()->next;
+    if (ecs.is_valid(next))
+    {
+      bb.set(entityBb, next);
+      return BEH_SUCCESS; 
+    }
+
+    return BEH_FAIL;
+  }
+};
 
 BehNode *sequence(const std::vector<BehNode*> &nodes)
 {
@@ -239,3 +350,12 @@ BehNode *patrol(flecs::entity entity, float patrol_dist, const char *bb_name)
   return new Patrol(entity, patrol_dist, bb_name);
 }
 
+BehNode *find_pick_up(flecs::entity entity, const char *bb_name)
+{
+  return new FindPickUp(entity, bb_name);
+}
+
+BehNode *next_waypoint(flecs::entity entity, const char *bb_name)
+{
+  return new NextWayPoint(entity, bb_name);
+}

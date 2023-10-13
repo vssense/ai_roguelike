@@ -4,7 +4,7 @@
 #include "stateMachine.h"
 #include "aiLibrary.h"
 #include "blackboard.h"
-
+#include "aiUtils.h"
 
 static void create_minotaur_beh(flecs::entity e)
 {
@@ -25,6 +25,25 @@ static void create_minotaur_beh(flecs::entity e)
   e.set(BehaviourTree{root});
 }
 
+static void create_collector_beh(flecs::entity e)
+{
+  e.set(Blackboard{});
+  BehNode *root =
+    selector({
+      sequence({
+        find_enemy(e, 2.f, "attack_enemy"),
+        move_to_entity(e, "attack_enemy")
+      }),
+      sequence({
+        find_pick_up(e, "buff_entity"),
+        move_to_entity(e, "buff_entity")
+      }),
+
+      patrol(e, 2.f, "patrol_pos")
+    });
+  e.set(BehaviourTree{root});
+}
+
 static flecs::entity create_monster(flecs::world &ecs, int x, int y, Color col, const char *texture_src)
 {
   flecs::entity textureSrc = ecs.entity(texture_src);
@@ -39,7 +58,8 @@ static flecs::entity create_monster(flecs::world &ecs, int x, int y, Color col, 
     .set(Team{1})
     .set(NumActions{1, 0})
     .set(MeleeDamage{20.f})
-    .set(Blackboard{});
+    .set(Blackboard{})
+    .add<IsPickUpper>();
 }
 
 static void create_player(flecs::world &ecs, int x, int y, const char *texture_src)
@@ -57,7 +77,8 @@ static void create_player(flecs::world &ecs, int x, int y, const char *texture_s
     .set(NumActions{2, 0})
     .set(Color{255, 255, 255, 255})
     .add<TextureSource>(textureSrc)
-    .set(MeleeDamage{50.f});
+    .set(MeleeDamage{50.f})
+    .add<IsPickUpper>();
 }
 
 static void create_heal(flecs::world &ecs, int x, int y, float amount)
@@ -74,6 +95,42 @@ static void create_powerup(flecs::world &ecs, int x, int y, float amount)
     .set(Position{x, y})
     .set(PowerupAmount{amount})
     .set(Color{0xff, 0xff, 0x00, 0xff});
+}
+
+static flecs::entity create_waypoint(flecs::world& ecs, int x, int y, flecs::entity way = flecs::entity())
+{
+    return ecs.entity()
+        .set(Position{ x, y })
+        .set(WayPoint{ way });
+}
+
+static void create_guard_beh(flecs::world &ecs, flecs::entity e, const std::vector<Position>& waypoint_positions)
+{
+  std::vector<flecs::entity> waypoints;
+  for (uint32_t i = 0; i < waypoint_positions.size(); ++i) {
+    auto waypoint = create_waypoint(ecs, waypoint_positions[i].x, waypoint_positions[i].y, i == 0 ? flecs::entity() : waypoints.back());
+    waypoints.push_back(waypoint);
+  }
+
+  e.set(Blackboard{});
+
+  size_t bb = reg_entity_blackboard_var<flecs::entity>(e, "waypoint");
+  e.set([&](Blackboard& blackboard) {
+    blackboard.set<flecs::entity>(bb, waypoints[0]);
+  });
+
+  BehNode *root =
+    selector({
+      sequence({
+        find_enemy(e, 2.f, "attack_enemy"),
+        move_to_entity(e, "attack_enemy")
+      }),
+      sequence({
+        move_to_entity(e, "waypoint"),
+        next_waypoint(e, "waypoint")
+      }),
+    });
+  e.set(BehaviourTree{root});
 }
 
 static void register_roguelike_systems(flecs::world &ecs)
@@ -146,6 +203,17 @@ void init_roguelike(flecs::world &ecs)
 
   create_heal(ecs, -5, -5, 50.f);
   create_heal(ecs, -5, 5, 50.f);
+
+  auto collector = create_monster(ecs, -10, 5, Color{255, 255, 255, 255}, "minotaur_tex");
+  create_collector_beh(collector);
+
+  auto guard = create_monster(ecs, -10, -5, Color{255, 255, 255, 255}, "minotaur_tex");
+  guard.set(Team{0});
+  guard.set(MeleeDamage{50.f});
+  create_guard_beh(ecs, guard, {Position{-10, -10},
+                                Position{-10, 10},
+                                Position{10, 10},
+                                Position{10, -10}});
 }
 
 static bool is_player_acted(flecs::world &ecs)
@@ -227,12 +295,12 @@ static void process_actions(flecs::world &ecs)
     });
   });
 
-  static auto playerPickup = ecs.query<const IsPlayer, const Position, Hitpoints, MeleeDamage>();
+  static auto pickup = ecs.query<const IsPickUpper, const Position, Hitpoints, MeleeDamage>();
   static auto healPickup = ecs.query<const Position, const HealAmount>();
   static auto powerupPickup = ecs.query<const Position, const PowerupAmount>();
   ecs.defer([&]
   {
-    playerPickup.each([&](const IsPlayer&, const Position &pos, Hitpoints &hp, MeleeDamage &dmg)
+    pickup.each([&](const IsPickUpper&, const Position &pos, Hitpoints &hp, MeleeDamage &dmg)
     {
       healPickup.each([&](flecs::entity entity, const Position &ppos, const HealAmount &amt)
       {
