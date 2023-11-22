@@ -7,6 +7,9 @@
 #include "math.h"
 #include "dungeonGen.h"
 #include "dungeonUtils.h"
+#include <cstdio>
+#include <cstdint>
+#include <set>
 
 template<typename T>
 static size_t coord_to_idx(T x, T y, size_t w)
@@ -184,11 +187,158 @@ static std::vector<Position> find_path_a_star(const char *input, size_t width, s
   return std::vector<Position>();
 }
 
+std::vector<Position> find_path_ara_star(const char *input, size_t width, size_t height, Position from, Position to)
+{
+  float eps = 7.f;
+
+  const auto position_to_index = [width](const Position& pos) {
+    return coord_to_idx(pos.x, pos.y, width);
+  };
+
+  std::vector<float> g_score(width * height, FLT_MAX);
+  g_score[position_to_index(from)] = 0.f;
+
+  const auto is_valid_pos = [&](const Position& pos) {
+    return 0 <= pos.x && size_t(pos.x) < width &&
+           0 <= pos.y && size_t(pos.y) < height;
+  };
+
+  const auto get_weight = [&](size_t index) {
+    if (input[index] == '#') {
+      return FLT_MAX;
+    }
+
+    if (input[index] == 'o') {
+      return 10.f;
+    }
+
+    return 1.f;
+  };
+
+  const auto get_f_score = [&](const Position &pos) {
+    return g_score[position_to_index(pos)] + eps * heuristic(pos, to);
+  };
+
+  const auto position_comparer = [&](const Position& lhs, const Position& rhs) {
+    return get_f_score(lhs) < get_f_score(rhs);
+  };
+
+  const auto position_less = [](const Position& lhs, const Position& rhs) {
+    if (lhs.x == rhs.x) {
+      return lhs.y < rhs.y;
+    }
+
+    return lhs.x < rhs.x;
+  };
+
+  std::vector<Position> prev(width * height, Position{});
+  std::set<Position, decltype(position_comparer)> open(position_comparer);
+  open.insert(from);
+  std::set<Position, decltype(position_less)> closed(position_less);
+  std::vector<Position> incons;
+
+  const auto improve_neighbour = [&](const Position& pos, const Position& neighbour) {
+    if (!is_valid_pos(neighbour)) {
+      return;
+    }
+
+    size_t pos_index = position_to_index(pos);
+    size_t neigh_index = position_to_index(neighbour);
+    float improved_g = g_score[pos_index] + get_weight(neigh_index);
+    if (g_score[neigh_index] > improved_g) {
+      g_score[neigh_index] = improved_g;
+      prev[neigh_index] = pos;
+      if (closed.count(neighbour) > 0) {
+        incons.push_back(neighbour);
+      } else {
+        open.insert(neighbour);
+      }
+    }
+  };
+
+  const auto improve_path = [&]() {
+    while (!open.empty()) {
+      auto pos = *open.begin();
+      if (get_f_score(to) <= get_f_score(pos)) {
+        break;
+      }
+
+      open.erase(open.begin());
+      DrawRectangleRec({float(pos.x), float(pos.y), 1.f, 1.f}, GetColor(0xbbbbbbff));
+
+      closed.insert(pos);
+
+      improve_neighbour(pos, Position{pos.x + 1, pos.y});
+      improve_neighbour(pos, Position{pos.x, pos.y + 1});
+      improve_neighbour(pos, Position{pos.x - 1, pos.y});
+      improve_neighbour(pos, Position{pos.x, pos.y - 1});
+    }
+  };
+
+  const auto estimate_eps = [&]() {
+    float min_epsilon = FLT_MAX;
+    if (!open.empty()) {
+      min_epsilon = get_f_score(*open.begin());
+    }
+
+    for (const auto& pos : incons) {
+      min_epsilon = std::min(min_epsilon, get_f_score(pos));
+    }
+
+    if (min_epsilon == FLT_MAX || g_score[position_to_index(to)] == FLT_MAX) {
+      return eps;
+    }
+
+    return std::min(eps, g_score[position_to_index(to)] / min_epsilon);
+  };
+
+  const auto reconstruct_path = [&]() {
+    std::vector<Position> path;
+    if (g_score[position_to_index(to)] == FLT_MAX) {
+      return path;
+    }
+
+    Position cur = to;
+    while (cur != from) {
+      path.push_back(cur);
+      cur = prev[position_to_index(cur)];
+    }
+
+    path.push_back(from);
+    return path;
+  };
+
+  improve_path();
+  printf("SHIIREJFERFOIERJFER");
+  while (estimate_eps() > 1.f) {
+    printf("%f\n", estimate_eps());
+
+    eps -= 0.5f;
+    
+    // eps changed so need to rebuild heap
+    for (const auto& pos : open) {
+      incons.push_back(pos);
+    }
+    open.clear();
+    
+    for (const auto& pos : incons) {
+      open.insert(pos);
+    }
+    incons.clear();
+    closed.clear();
+
+    improve_path();
+  }
+
+  return reconstruct_path();
+}
+
 void draw_nav_data(const char *input, size_t width, size_t height, Position from, Position to, float weight)
 {
   draw_nav_grid(input, width, height);
-  std::vector<Position> path = find_path_a_star(input, width, height, from, to, weight);
-  //std::vector<Position> path = find_ida_star_path(input, width, height, from, to);
+  // std::vector<Position> path = find_path_a_star(input, width, height, from, to, weight);
+  // std::vector<Position> path = find_ida_star_path(input, width, height, from, to);
+  std::vector<Position> path = find_path_ara_star(input, width, height, from, to);
   draw_path(path);
 }
 
@@ -198,8 +348,8 @@ int main(int /*argc*/, const char ** /*argv*/)
   int height = 1080;
   InitWindow(width, height, "w3 AI MIPT");
 
-  const int scrWidth = GetMonitorWidth(0);
-  const int scrHeight = GetMonitorHeight(0);
+  const int scrWidth = 700;
+  const int scrHeight = 700;
   if (scrWidth < width || scrHeight < height)
   {
     width = std::min(scrWidth, width);
