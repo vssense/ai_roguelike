@@ -87,7 +87,7 @@ static void debug_enemy_planner()
 
     std::vector<goap::PlanStep> plan;
     goap::make_plan(pl, ws, goal, plan);
-    goap::print_plan(pl, ws, plan);
+    // goap::print_plan(pl, ws, plan);
   }
   {
     goap::WorldState ws = goap::produce_planner_worldstate(pl,
@@ -103,7 +103,7 @@ static void debug_enemy_planner()
 
     std::vector<goap::PlanStep> plan;
     goap::make_plan(pl, ws, goal, plan);
-    goap::print_plan(pl, ws, plan);
+    // goap::print_plan(pl, ws, plan);
   }
 }
 
@@ -185,7 +185,12 @@ static void debug_looter_planner()
       {{"num_loot", 5}, {"escaped", 1}, {"health_state", Healthy}});
 
   std::vector<goap::PlanStep> plan;
+  printf("\nA* plan\n");
   goap::make_plan(pl, ws, goal, plan);
+  goap::print_plan(pl, ws, plan);
+
+  printf("\nIDA* plan\n");
+  goap::make_plan_ida_star(pl, ws, goal, plan);
   goap::print_plan(pl, ws, plan);
 }
 

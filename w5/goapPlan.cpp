@@ -1,5 +1,6 @@
 #include "goapPlanner.h"
 #include <algorithm>
+#include <cfloat>
 
 struct PlanNode
 {
@@ -31,6 +32,65 @@ static void reconstruct_plan(PlanNode &goal_node, const std::vector<PlanNode> &c
     curNode = *itf;
   }
   std::reverse(plan.begin(), plan.end());
+}
+
+namespace goap
+{
+static float search_ida_star(const Planner &planner, const WorldState &from, float g, float bound, const WorldState &to, std::vector<PlanStep> &plan)
+{
+  float f = g + heuristic(from, to);
+  if (f > bound)
+    return f;
+  
+  if (heuristic(from, to) == 0)
+    return -f;
+  
+  auto transitions = find_valid_state_transitions(planner, from);
+  float min = FLT_MAX;
+  for (auto actId : transitions)
+  {
+    auto next = apply_action(planner, actId, from);
+    auto it = std::find_if(plan.begin(), plan.end(), [&next](const auto& step) {
+      return step.worldState == next;
+    });
+
+    if (it != plan.end())
+      continue;
+    
+    plan.push_back({actId, next});
+    float g_next = g + get_action_cost(planner, actId);
+    float search_res = search_ida_star(planner, next, g_next, bound, to, plan);
+    if (search_res < 0.f)
+      return search_res;
+    
+    if (search_res < min)
+      min = search_res;
+
+    plan.pop_back();
+  }
+
+  return min;
+}
+}
+
+float goap::make_plan_ida_star(const Planner &planner, const WorldState &from, const WorldState &to, std::vector<PlanStep> &plan)
+{
+  float bound = heuristic(from, to);
+  plan.clear();
+
+  while (true)
+  {
+    float result = search_ida_star(planner, from, 0.f, bound, to, plan);
+    if (result < 0.f)
+      return -result;
+
+    if (result == FLT_MAX)
+      break;
+    
+    bound = result;
+  }
+
+  return 0.f;
 }
 
 float goap::make_plan(const Planner &planner, const WorldState &from, const WorldState &to, std::vector<PlanStep> &plan)
