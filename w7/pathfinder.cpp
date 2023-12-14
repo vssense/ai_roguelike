@@ -2,16 +2,32 @@
 #include "dungeonUtils.h"
 #include "math.h"
 #include <algorithm>
+#include <cstddef>
 
-float heuristic(IVec2 lhs, IVec2 rhs)
+static float heuristic(IVec2 lhs, IVec2 rhs)
 {
   return sqrtf(sqr(float(lhs.x - rhs.x)) + sqr(float(lhs.y - rhs.y)));
 };
+
+static IVec2 PortalToCoord(const PathPortal& p)
+{
+  return IVec2{static_cast<int>((p.startX + p.endX) / 2), static_cast<int>((p.startY + p.endY) / 2)};
+}
+
+static float portal_heuristic(const PathPortal& lhs, const PathPortal& rhs)
+{
+  return heuristic(PortalToCoord(lhs), PortalToCoord(rhs));
+}
 
 template<typename T>
 static size_t coord_to_idx(T x, T y, size_t w)
 {
   return size_t(y) * w + size_t(x);
+}
+
+static size_t coord_to_idx(IVec2 v, size_t w)
+{
+  return coord_to_idx(v.x, v.y, w);
 }
 
 static std::vector<IVec2> reconstruct_path(std::vector<IVec2> prev, IVec2 to, size_t width)
@@ -97,6 +113,147 @@ static std::vector<IVec2> find_path_a_star(const DungeonData &dd, IVec2 from, IV
   return std::vector<IVec2>();
 }
 
+static std::vector<IVec2> find_path_a_star_portal(const DungeonData &dd, const DungeonPortals &dp,
+                                                  PathPortal from, PathPortal to)
+{
+  size_t inpSize = dd.width * dd.height;
+
+  std::vector<float> g(inpSize, std::numeric_limits<float>::max());
+  std::vector<IVec2> prev(inpSize, {-1, -1});
+
+  auto PortalToIdx = [&](const PathPortal& p)
+  {
+    return coord_to_idx(PortalToCoord(p), dd.width);
+  };
+
+  auto getG = [&](const PathPortal& p) -> float { return g[PortalToIdx(p)]; };
+  auto getF = [&](const PathPortal& p) -> float { return getG(p) + portal_heuristic(p, to); };
+
+  g[PortalToIdx(from)] = 0;
+
+  std::vector<PathPortal> openList = {from};
+  std::vector<PathPortal> closedList;
+
+  while (!openList.empty())
+  {
+    size_t bestIdx = 0;
+    float bestScore = getF(openList[0]);
+    for (size_t i = 1; i < openList.size(); ++i)
+    {
+      float score = getF(openList[i]);
+      if (score < bestScore)
+      {
+        bestIdx = i;
+        bestScore = score;
+      }
+    }
+    if (openList[bestIdx] == to)
+    {
+      IVec2 to_coord = PortalToCoord(to);
+      return reconstruct_path(prev, to_coord, dd.width);
+    }
+    const auto curPortal = openList[bestIdx];
+    openList.erase(openList.begin() + bestIdx);
+    if (std::find(closedList.begin(), closedList.end(), curPortal) != closedList.end())
+      continue;
+    closedList.emplace_back(curPortal);
+
+    auto checkNeighbour = [&](const PathPortal& p, float edgeWeight) {
+      size_t idx = PortalToIdx(p);
+      float gScore = getG(curPortal) + 1.f * edgeWeight;
+      if (gScore < getG(p)) {
+        prev[idx] = PortalToCoord(curPortal);
+        g[idx] = gScore;
+      }
+      bool found = std::find(openList.begin(), openList.end(), p) != openList.end();
+      if (!found)
+        openList.emplace_back(p);
+    };
+
+    for (auto c : curPortal.conns)
+    {
+      const PathPortal& p = dp.portals[c.connIdx];
+      size_t idx = PortalToIdx(p);
+      float gScore = getG(curPortal) + c.score;
+      if (gScore < getG(p))
+      {
+        prev[idx] = PortalToCoord(curPortal);
+        g[idx] = gScore;
+      }
+
+      bool found = std::find(openList.begin(), openList.end(), p) != openList.end();
+      if (!found)
+        openList.emplace_back(p); 
+    }
+  }
+  return {};
+}
+
+static std::vector<IVec2> get_shortest_path_portal(const DungeonData &dd, const DungeonPortals &dp,
+                                            IVec2 from, IVec2 tile, PathPortal &p)
+{
+  // actually, this is from prebuild_map()
+  auto shortestPath = std::vector<IVec2>();
+  size_t idx = tile.y * dd.width / dp.tileSplit + tile.x;
+
+  for (const auto portal_ind : dp.tilePortalsIndices[idx])
+  {
+    auto p = dp.portals[portal_ind];
+    IVec2 limMin{tile.x * (int)dp.tileSplit, tile.y * (int)dp.tileSplit};
+    IVec2 limMax{(tile.x + 1) * (int)dp.tileSplit, (tile.y + 1) * (int)dp.tileSplit};
+
+    bool noPath = false;
+    auto path = std::vector<IVec2>();
+    for (size_t toY = std::max(p.startY, size_t(limMin.y));
+         toY <= std::min(p.endY, size_t(limMax.y - 1)) && !noPath; ++toY)
+    {
+      for (size_t toX = std::max(p.startX, size_t(limMin.x));
+           toX <= std::min(p.endX, size_t(limMax.x - 1)) && !noPath; ++toX)
+      {
+        IVec2 to{int(toX), int(toY)};
+        std::vector<IVec2> curPath = find_path_a_star(dd, from, to, limMin, limMax);
+        if (curPath.empty() && from != to)
+        {
+          noPath = true;
+          break;
+        }
+        if (path.empty() || curPath.size() < path.size())
+          path = std::move(curPath);
+      }
+    }
+
+    if (shortestPath.empty() || path.size() < shortestPath.size())
+    {
+      shortestPath = std::move(path);
+    }
+  }
+  return shortestPath;
+}
+
+std::vector<IVec2> find_hierarchical_path(const DungeonPortals &dp, const DungeonData &dd, IVec2 source, IVec2 target)
+{
+  int tile_split = (int)dp.tileSplit;
+  const IVec2 source_tile{source.x / tile_split, source.y / tile_split};
+  const IVec2 target_tile{target.x / tile_split, target.y / tile_split};
+
+  if (source_tile == target_tile)
+  {
+    return find_path_a_star(dd, source, target, {source_tile.x * tile_split, source_tile.y * tile_split},
+                                                         {(source_tile.x + 1) * tile_split, (source_tile.y + 1) * tile_split});
+  }
+
+  PathPortal source_portal;
+  PathPortal target_portal;
+  auto source_to_portal = get_shortest_path_portal(dd, dp, source, source_tile, source_portal);
+  auto portal_to_target = get_shortest_path_portal(dd, dp, target, target_tile, target_portal);
+
+  auto portals_path = find_path_a_star_portal(dd, dp, source_portal, target_portal);
+
+  source_to_portal.insert(source_to_portal.end(), portals_path.begin(), portals_path.end());
+  source_to_portal.insert(source_to_portal.end(), portal_to_target.begin(), portal_to_target.end());
+
+  return source_to_portal;
+}
 
 void prebuild_map(flecs::world &ecs)
 {

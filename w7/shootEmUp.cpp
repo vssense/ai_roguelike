@@ -9,6 +9,25 @@
 
 constexpr float tile_size = 64.f;
 
+static const IVec2 invalid{-1, -1};
+static IVec2 source{invalid};
+static IVec2 target{invalid};
+
+void draw_path(const std::vector<IVec2>& path)
+{
+  if (path.empty())
+    return;
+
+  DrawRectangleRec({path[0].x * tile_size, path[0].y * tile_size, tile_size, tile_size}, DARKBLUE);
+
+  for (size_t i = 1; i < path.size(); i++)
+  {
+    DrawRectangleRec({path[i].x * tile_size, path[i].y * tile_size, tile_size, tile_size}, DARKBLUE);
+    DrawLineEx(Vector2{(path[i - 1].x ) * tile_size + tile_size / 2, (path[i - 1].y) * tile_size + tile_size / 2},
+               Vector2{(path[i].x) * tile_size + tile_size / 2, (path[i].y) * tile_size + tile_size / 2}, 10.f, SKYBLUE);
+  }
+}
+
 static void register_roguelike_systems(flecs::world &ecs)
 {
   static auto playerPosQuery = ecs.query<const Position, const IsPlayer>();
@@ -134,6 +153,17 @@ static void register_roguelike_systems(flecs::world &ecs)
                      (fromCenter.y + toCenter.y) * 0.5f,
                      16, WHITE);
           }
+        }
+
+        IVec2 hovered = {static_cast<int>(mousePosition.x / tile_size), static_cast<int>(mousePosition.y / tile_size)};
+        if (IsMouseButtonPressed(0))
+          source = hovered;
+        else if (IsMouseButtonPressed(1))
+          target = hovered;
+
+        if (source != invalid && target != invalid)
+        {
+          draw_path(find_hierarchical_path(dp, dd, source, target));
         }
       });
     });
